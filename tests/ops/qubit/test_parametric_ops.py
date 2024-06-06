@@ -145,7 +145,6 @@ class TestOperations:
     @pytest.mark.parametrize("op", ALL_OPERATIONS)
     def test_standard_validity(self, op):
         """Test standard criteria for a valid operation."""
-        print(op)
         if isinstance(op, (qml.GlobalPhase, qml.Identity)):
             # Decomposition does not preserve matrix (decomposition does not have matrix).
             return
