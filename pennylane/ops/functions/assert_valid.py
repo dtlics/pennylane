@@ -246,6 +246,79 @@ def _check_pickle(op):
     assert unpickled == op, "operation must be able to be pickled and unpickled"
 
 
+def _check_differentiation(op):
+    """Check that an operation is differentiable with backprop and parameter-shift
+    if applicable, as well as through its decomposition."""
+    if op.num_params == 0:
+        return
+    try:
+        import jax
+    except ImportError:
+        return
+
+    if op.num_params > 1:
+        check_param_shift = False
+    if op.grad_method in ["F", None]:
+        check_param_shift = False
+    else:
+        check_param_shift = True
+        assert op.grad_method == "A"
+        if op.grad_recipe[0] is None:
+            try:
+                frequencies = op.parameter_frequencies[0]
+            except qml.operation.ParameterFrequenciesUndefinedError as e:
+                msg = (
+                    "Operations with grad_method='A' and no grad_recipe need to define parameter"
+                    " frequencies."
+                )
+                raise AssertionError(msg)
+            coeffs, shifts = qml.gradients.generate_shift_rule(frequencies).T
+            mults = qml.math.ones_like(coeffs)
+        else:
+            coeffs, mults, shifts = zip(*op.grad_recipe[0])
+
+    def choi(m):
+        vec = qml.math.reshape(m, (-1,))
+        adj_vec = qml.math.reshape(qml.math.transpose(qml.math.conj(m)), (-1,))
+        return qml.math.tensordot(vec, adj_vec, axes=0)
+
+    def fun(*data):
+        mat = qml.ops.functions.bind_new_parameters(op, data).matrix()
+        return qml.math.real(choi(mat)), qml.math.imag(choi(mat))
+
+    mat = op.matrix()
+
+    if op.has_decomposition:
+
+        def decomp_fun(*data):
+            ops = qml.ops.functions.bind_new_parameters(op, data).decomposition()
+            mat = qml.matrix(qml.tape.QuantumScript(ops), wire_order=op.wires)
+            return qml.math.real(choi(mat)), qml.math.imag(choi(mat))
+
+        jac = jax.jacfwd(fun, argnums=0)(*op.data)
+        decomp_jac = jax.jacfwd(decomp_fun, argnums=0)(*op.data)
+        message = (
+            f"Jacobian and Jacobian from decomposition need to match, got\n{jac}\n{decomp_jac}"
+        )
+
+        assert qml.math.allclose(jac, decomp_jac), message
+
+    if check_param_shift:
+        return
+
+        def par_shift_fun(x):
+            grad_recipe = qml.gradients.generate_shift_rule(cls(x, wires).parameter_frequencies[0])
+            coeffs, shifts = grad_recipe.T
+
+            mats = [cls(x + shift, wires).matrix() for shift in shifts]
+            chois = [choi(mat) for mat in mats]
+            out = qml.math.tensordot(coeffs, chois, axes=[[0], [0]])
+            return qml.math.real(out), qml.math.imag(out)
+
+        ps_jac = par_shift_fun(x)
+        assert qml.math.allclose(jac, ps_jac)
+
+
 # pylint: disable=no-member
 def _check_bind_new_parameters(op):
     """Check that bind new parameters can create a new op with different data."""
@@ -332,3 +405,4 @@ def assert_valid(op: qml.operation.Operator, skip_pickle=False, skip_wire_mappin
     _check_matrix_matches_decomp(op)
     _check_eigendecomposition(op)
     _check_capture(op)
+    _check_differentiation(op)

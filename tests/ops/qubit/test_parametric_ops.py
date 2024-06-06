@@ -25,6 +25,7 @@ from scipy import sparse
 
 import pennylane as qml
 from pennylane import numpy as npp
+from pennylane.ops.functions import assert_valid
 from pennylane.ops.qubit import RX as old_loc_RX
 from pennylane.ops.qubit import MultiRZ as old_loc_MultiRZ
 from pennylane.wires import Wires
@@ -140,6 +141,19 @@ def multi_dot_broadcasted(matrices):
 
 
 class TestOperations:
+
+    @pytest.mark.parametrize("op", ALL_OPERATIONS)
+    def test_standard_validity(self, op):
+        """Test standard criteria for a valid operation."""
+        print(op)
+        if isinstance(op, (qml.GlobalPhase, qml.Identity)):
+            # Decomposition does not preserve matrix (decomposition does not have matrix).
+            return
+        if isinstance(op, (qml.QubitUnitary, qml.DiagonalQubitUnitary, qml.ControlledQubitUnitary)):
+            # Decomposition does not preserve derivative
+            return
+        assert_valid(op)
+
     @pytest.mark.parametrize("op", ALL_OPERATIONS + BROADCASTED_OPERATIONS)
     def test_parametrized_op_copy(self, op, tol):
         """Tests that copied parametrized ops function as expected"""
