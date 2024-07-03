@@ -640,7 +640,6 @@ class Controlled(SymbolicOp):
         return False
 
     def decomposition(self):
-
         if self.compute_decomposition is not Operator.compute_decomposition:
             return self.compute_decomposition(*self.data, self.wires)
 
@@ -764,9 +763,17 @@ def _decompose_custom_ops(op: Controlled) -> List["operation.Operator"]:
         # has some special case handling of its own for further decomposition
         return _decompose_pauli_x_based_no_control_values(op)
 
-    if isinstance(op.base, qml.GlobalPhase) and len(op.control_wires) == 1:
+    if isinstance(op.base, qml.GlobalPhase) and op.control_wires:
         # use Lemma 5.2 from https://arxiv.org/pdf/quant-ph/9503016
-        return [qml.PhaseShift(phi=-op.data[0], wires=op.control_wires)]
+        return (
+            [qml.PhaseShift(phi=-op.data[0], wires=op.control_wires)]
+            if len(op.control_wires) == 1
+            else [
+                ctrl(qml.PhaseShift, control=op.control_wires, control_values=op.control_values)(
+                    phi=-op.data[0], wires=op.control_wires
+                )
+            ]
+        )
     # A multi-wire controlled PhaseShift should be decomposed first using the decomposition
     # of ControlledPhaseShift. This is because the decomposition of PhaseShift contains a
     # GlobalPhase that we do not have a handling for.

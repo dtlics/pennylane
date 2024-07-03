@@ -188,10 +188,6 @@ def ctrl_decomp_zyz(target_operation: Operator, control_wires: Wires):
             f"got {target_operation.__class__.__name__}."
         )
     control_wires = Wires(control_wires)
-    if len(control_wires) > 1:
-        raise ValueError(
-            f"The control_wires should be a single wire, instead got: {len(control_wires)}-wires"
-        )
 
     target_wire = target_operation.wires
 
