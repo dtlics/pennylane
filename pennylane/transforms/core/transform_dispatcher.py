@@ -80,6 +80,7 @@ class TransformDispatcher:
         self._final_transform = is_informative or final_transform
         self._qnode_transform = self.default_qnode_transform
         self._use_argnum_in_expand = use_argnum_in_expand
+        self._plxpr_tranform = None
         functools.update_wrapper(self, transform)
 
     def __call__(self, *targs, **tkwargs):  # pylint: disable=too-many-return-statements
@@ -130,6 +131,14 @@ class TransformDispatcher:
             return self._qfunc_transform(obj, targs, tkwargs)
         if isinstance(obj, Sequence) and all(isinstance(q, qml.tape.QuantumScript) for q in obj):
             return self._batch_transform(obj, targs, tkwargs)
+
+        # if qml.capture.enabled():
+        #     import jax
+
+        #     if isinstance(obj, jax.core.Primitive):
+        #         tracers, params = targs[:2]
+        #         targs = targs[2:]
+        #         return self.plxpr_transform(obj, tracers, params, {}, targs, tkwargs)
 
         # Input is not a QNode nor a quantum tape nor a device.
         # Assume Python decorator syntax:
@@ -225,9 +234,19 @@ class TransformDispatcher:
                 self._classical_cotransform,
                 self._is_informative,
                 self._final_transform,
+                plxpr_transform=self._plxpr_tranform,
             )
         )
         return qnode
+
+    @property
+    def plxpr_transform(self):
+        # if self._plxpr_tranform is None:
+        #     raise ValueError("why are you using this transform bud?")
+        return self._plxpr_tranform
+
+    def custom_plxpr_transform(self, fn):
+        self._plxpr_tranform = types.MethodType(fn, self)
 
     def _qfunc_transform(self, qfunc, targs, tkwargs):
         """Apply the transform on a quantum function."""
@@ -373,6 +392,7 @@ class TransformContainer:
         is_informative=False,
         final_transform=False,
         use_argnum=False,
+        plxpr_transform=None,
     ):  # pylint:disable=redefined-outer-name,too-many-arguments
         self._transform = transform
         self._args = args or []
@@ -381,6 +401,7 @@ class TransformContainer:
         self._is_informative = is_informative
         self._final_transform = is_informative or final_transform
         self._use_argnum = use_argnum
+        self._plxpr_transform = plxpr_transform
 
     def __repr__(self):
         return f"<{self._transform.__name__}({self._args}, {self._kwargs})>"
@@ -438,3 +459,8 @@ class TransformContainer:
     def final_transform(self):
         """``True`` if the transform needs to be executed"""
         return self._final_transform
+
+    @property
+    def plxpr_transform(self):
+        """PLxpr transform, if it exists"""
+        return self._plxpr_transform

@@ -142,6 +142,9 @@ AbstractOperator: type
 AbstractMeasurement: type
 qnode_prim: "jax.core.Primitive"
 
+TransformTrace: type
+TransformTracer: type
+
 
 def __getattr__(key):
     if key == "AbstractOperator":
@@ -158,6 +161,16 @@ def __getattr__(key):
         from .capture_qnode import _get_qnode_prim  # pylint: disable=import-outside-toplevel
 
         return _get_qnode_prim()
+
+    if key == "TransformTrace":
+        from .trace import _get_transform_trace
+
+        return _get_transform_trace()[0]
+
+    if key == "TransformTracer":
+        from .trace import _get_transform_trace
+
+        return _get_transform_trace()[1]
 
     raise AttributeError(f"module 'pennylane.capture' has no attribute '{key}'")
 

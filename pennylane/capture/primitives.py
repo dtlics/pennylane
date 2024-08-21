@@ -182,7 +182,7 @@ def create_operator_primitive(
     if not has_jax:
         return None
 
-    primitive = jax.core.Primitive(operator_type.__name__)
+    primitive = jax.core.Primitive(f"qml.{operator_type.__name__}")
 
     @primitive.def_impl
     def _(*args, **kwargs):

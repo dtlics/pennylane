@@ -19,6 +19,7 @@ import warnings
 from copy import copy
 from dataclasses import asdict
 from functools import lru_cache, partial
+from typing import Callable
 
 import pennylane as qml
 
@@ -27,6 +28,7 @@ from .flatfn import FlatFn
 has_jax = True
 try:
     import jax
+
 except ImportError:
     has_jax = False
 
@@ -88,6 +90,27 @@ def _get_qnode_prim():
         return _get_shapes_for(*mps, shots=shots, num_device_wires=len(device.wires))
 
     return qnode_prim
+
+
+def _transform_plxpr(f: Callable, transform_program: "qml.transforms.core.TransformProgram"):
+    from .interpreters import TransformInterpreter
+    from .trace import _get_transform_trace
+
+    TransformTrace, TransformTracer = _get_transform_trace()
+
+    def wrapper(*args):
+        jaxpr = jax.make_jaxpr(f)(*args)
+
+        with jax.core.new_main(TransformTrace, transform_program=transform_program) as main:
+            trace = main.with_cur_sublevel()
+            tracers_in = [TransformTracer(trace, a, 0) for a in args]
+
+            tracers_out = TransformInterpreter(trace).eval(jaxpr.jaxpr, jaxpr.consts, *tracers_in)
+            if isinstance(tracers_out, list):
+                return [r.val if isinstance(r, TransformTracer) else r for r in tracers_out]
+            return tracers_out.val if isinstance(tracers_out, TransformTracer) else tracers_out
+
+    return wrapper
 
 
 def qnode_call(qnode: "qml.QNode", *args, **kwargs) -> "qml.typing.Result":
@@ -166,6 +189,7 @@ def qnode_call(qnode: "qml.QNode", *args, **kwargs) -> "qml.typing.Result":
         raise NotImplementedError("devices must specify wires for integration with plxpr capture.")
 
     qfunc = partial(qnode.func, **kwargs) if kwargs else qnode.func
+    qfunc = _transform_plxpr(qfunc, qnode.transform_program)
 
     flat_fn = FlatFn(qfunc)
     qfunc_jaxpr = jax.make_jaxpr(flat_fn)(*args)

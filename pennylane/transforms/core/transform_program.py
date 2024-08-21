@@ -253,6 +253,7 @@ class TransformProgram:
                 transform.classical_cotransform,
                 transform.is_informative,
                 transform.final_transform,
+                plxpr_transform=transform.plxpr_transform,
             )
         )
 
@@ -280,6 +281,7 @@ class TransformProgram:
                 transform.classical_cotransform,
                 transform.is_informative,
                 transform.final_transform,
+                plxpr_transform=transform.plxpr_transform,
             )
         )
 

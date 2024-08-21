@@ -15,10 +15,32 @@ from pennylane.ops.op_math.condition import _get_cond_qfunc_prim
 from pennylane.tape import QuantumScript
 
 from .base_interpreter import PlxprInterpreter
+from .trace import _get_transform_trace
 
 for_prim = _get_for_loop_qfunc_prim()
 midmeasure_prim = _create_mid_measure_primitive()
 cond_prim = _get_cond_qfunc_prim()
+TransformTrace, TransformTracer = _get_transform_trace()
+
+
+class TransformInterpreter(PlxprInterpreter):
+
+    def __init__(self, trace, state=None):
+        self.trace = trace
+        super().__init__(state=state)
+
+    def interpret_operation_eqn(self, eqn):
+        invals = [self.read(invar) for invar in eqn.invars]
+        # invals = [super().read(invar) for invar in eqn.invars]
+        # if eqn.primitive.name[:4] == "qml.":
+        #     invals = [TransformTracer(self.trace, val, 0) for val in invals]
+        return eqn.primitive.bind(*invals, **eqn.params)
+
+    def read(self, var):
+        val = super().read(var)
+        if getattr(val, "_trace", None) is self.trace:
+            return val
+        return TransformTracer(self.trace, val, 0)
 
 
 class DefaultQubitInterpreter(PlxprInterpreter):
