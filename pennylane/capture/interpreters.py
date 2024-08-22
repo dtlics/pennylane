@@ -29,12 +29,13 @@ class TransformInterpreter(PlxprInterpreter):
         self.trace = trace
         super().__init__(state=state)
 
-    def interpret_operation_eqn(self, eqn):
+    def interpret_operation_eqn(self, eqn: "jax.core.JaxprEqn"):
         invals = [self.read(invar) for invar in eqn.invars]
-        # invals = [super().read(invar) for invar in eqn.invars]
-        # if eqn.primitive.name[:4] == "qml.":
-        #     invals = [TransformTracer(self.trace, val, 0) for val in invals]
-        return eqn.primitive.bind(*invals, **eqn.params)
+        if isinstance(eqn.outvars[0], jax.core.DropVar):
+            return eqn.primitive.bind(*invals, **eqn.params)
+        with jax.core.new_main(jax.core.EvalTrace, dynamic=True):
+            op = eqn.primitive.bind(*invals, **eqn.params)
+        return op
 
     def read(self, var):
         val = super().read(var)

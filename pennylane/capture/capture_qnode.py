@@ -103,9 +103,7 @@ def _transform_plxpr(f: Callable, transform_program: "qml.transforms.core.Transf
 
         with jax.core.new_main(TransformTrace, transform_program=transform_program) as main:
             trace = main.with_cur_sublevel()
-            tracers_in = [TransformTracer(trace, a, 0) for a in args]
-
-            tracers_out = TransformInterpreter(trace).eval(jaxpr.jaxpr, jaxpr.consts, *tracers_in)
+            tracers_out = TransformInterpreter(trace).eval(jaxpr.jaxpr, jaxpr.consts, *args)
             if isinstance(tracers_out, list):
                 return [r.val if isinstance(r, TransformTracer) else r for r in tracers_out]
             return tracers_out.val if isinstance(tracers_out, TransformTracer) else tracers_out
@@ -190,6 +188,8 @@ def qnode_call(qnode: "qml.QNode", *args, **kwargs) -> "qml.typing.Result":
 
     qfunc = partial(qnode.func, **kwargs) if kwargs else qnode.func
     qfunc = _transform_plxpr(qfunc, qnode.transform_program)
+    # if qnode.transform_program:
+    #     qfunc = _transform_plxpr(qfunc, qnode.transform_program)
 
     flat_fn = FlatFn(qfunc)
     qfunc_jaxpr = jax.make_jaxpr(flat_fn)(*args)

@@ -391,12 +391,18 @@ def decompose(
 @decompose.custom_plxpr_transform
 def _decompose_plxpr_transform(self, primitive, tracers, params, targs, tkwargs):
     """Binding function for processing primitives for decomposition"""
-    from pennylane.capture import TransformTrace, TransformTracer
+    from jax.core import EvalTrace, new_main
+
+    from pennylane.capture import TransformTracer
 
     stopping_condition = tkwargs["stopping_condition"]
 
     with qml.QueuingManager.stop_recording():
-        op = primitive.impl(*tracers, **params)
+        with new_main(EvalTrace, dynamic=True):
+            tracers_in = [
+                t.val if isinstance(t.val, qml.operation.Operator) else t for t in tracers
+            ]
+            op = primitive.bind(*tracers_in, **params)
     if stopping_condition(op):
         tracers = [
             TransformTracer(t._trace, t.val, t.idx + 1) if isinstance(t, TransformTracer) else t
@@ -404,14 +410,7 @@ def _decompose_plxpr_transform(self, primitive, tracers, params, targs, tkwargs)
         ]
         return primitive.bind(*tracers, **params)
 
-    if "n_wires" not in params:
-        raise ValueError("Can't decompose ops without wires")
-
-    n_wires = params["n_wires"]
-    wires = tracers[-n_wires:]
-    tracers = tracers[:-n_wires]
-
-    return op.compute_decomposition(*tracers, wires)
+    return op.decomposition()
 
 
 @transform

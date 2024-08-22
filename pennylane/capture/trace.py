@@ -15,8 +15,6 @@
 
 from functools import lru_cache
 
-import pennylane as qml
-
 has_jax = True
 try:
     import jax
@@ -31,11 +29,6 @@ def _get_transform_trace():
     if not has_jax:
         return None, None
 
-    # from .primitives import _get_abstract_measurement, _get_abstract_operator
-
-    # AbstractMeasurement = _get_abstract_measurement()
-    # AbstractOperator = _get_abstract_operator()
-
     class TransformTracer(Tracer):
         """Tracer for tracing PennyLane transforms"""
 
@@ -49,10 +42,6 @@ def _get_transform_trace():
 
         @property
         def aval(self):
-            # if isinstance(self.val, qml.operation.Operator):
-            #     return AbstractOperator()
-            # if isinstance(self.val, qml.measurements.MeasurementProcess):
-            #     return AbstractMeasurement()
             return jax.core.ShapedArray((), jnp.float64)
 
         def full_lower(self):
@@ -65,7 +54,7 @@ def _get_transform_trace():
             self,
             main: jax.core.MainTrace,
             sublevel: int,
-            transform_program: "qml.transforms.core.TransformProgram",
+            transform_program: "pennylane.transforms.core.TransformProgram",
         ):
             super().__init__(main, sublevel)
             self.transform_program = transform_program
@@ -76,12 +65,8 @@ def _get_transform_trace():
         lift = sublift = pure
 
         def process_primitive(self, primitive, tracers, params):
-            if (idx := max(t.idx for t in tracers if isinstance(t, TransformTracer))) >= len(
-                self.transform_program
-            ):
-                tracers = [t.val if isinstance(t, TransformTracer) else t for t in tracers]
-                return primitive.bind(*tracers, **params)
-            if primitive.name[:4] != "qml.":
+            idx = max(t.idx for t in tracers if isinstance(t, TransformTracer))
+            if idx >= len(self.transform_program) or primitive.name[:4] != "qml.":
                 tracers = [t.val if isinstance(t, TransformTracer) else t for t in tracers]
                 return primitive.bind(*tracers, **params)
 
