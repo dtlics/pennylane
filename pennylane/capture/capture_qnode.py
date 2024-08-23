@@ -187,9 +187,8 @@ def qnode_call(qnode: "qml.QNode", *args, **kwargs) -> "qml.typing.Result":
         raise NotImplementedError("devices must specify wires for integration with plxpr capture.")
 
     qfunc = partial(qnode.func, **kwargs) if kwargs else qnode.func
-    qfunc = _transform_plxpr(qfunc, qnode.transform_program)
-    # if qnode.transform_program:
-    #     qfunc = _transform_plxpr(qfunc, qnode.transform_program)
+    if qnode.transform_program:
+        qfunc = _transform_plxpr(qfunc, qnode.transform_program)
 
     flat_fn = FlatFn(qfunc)
     qfunc_jaxpr = jax.make_jaxpr(flat_fn)(*args)
