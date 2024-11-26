@@ -15,6 +15,7 @@
 This module contains the qml.map_wires function.
 """
 from collections.abc import Callable
+from functools import partial
 from typing import Union, overload
 
 import pennylane as qml
@@ -133,7 +134,24 @@ def processing_fn(res):
     return res[0]
 
 
-@transform
+def _map_wires_plxpr_transform(
+    self, primitive, tracers, params, targs, tkwargs, state=None
+):  # pylint: disable=unused-argument, too-many-arguments, too-many-positional-arguments
+    """Implementation for ``map_wires`` with program capture"""
+    from pennylane.capture import TransformTracer
+
+    wire_map = tkwargs.pop("wire_map", None)
+    queue = tkwargs.pop("queue", False)
+    if queue:
+        raise qml.transforms.core.TransformError(
+            "Cannot set 'queue=True' for the map_wires transform with program capture enabled."
+        )
+
+    with QueuingManager.stop_recording():
+        return
+
+
+@partial(transform, plxpr_transform=_map_wires_plxpr_transform)
 def _map_wires_transform(
     tape: QuantumScript, wire_map=None, queue=False
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
