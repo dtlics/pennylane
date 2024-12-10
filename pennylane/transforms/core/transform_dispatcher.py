@@ -20,20 +20,28 @@ import os
 import types
 import warnings
 from collections.abc import Sequence
+from typing import Callable
 
 import pennylane as qml
 from pennylane.typing import ResultBatch
+
+from .expand_plxpr_transforms import ExpandTransformsInterpreter
 
 
 class TransformError(Exception):
     """Raised when there is an error with the transform logic."""
 
 
-def _default_plxpr_transform(transform_name):  # pylint: disable=missing-function-docstring
-    def wrapper(*_, **__):
-        raise TransformError(f"{transform_name} cannot be used to transform PLxPR.")
+def register_plxpr_transform(transform_primitive, plxpr_transform):
 
-    return wrapper
+    @ExpandTransformsInterpreter.register_primitive(transform_primitive)
+    def _(self, *invals, inner_jaxpr, args_slice, consts_slice, targs_slice, tkwargs):
+        inner_args = invals[args_slice]
+        inner_consts = invals[consts_slice]
+        targs = invals[targs_slice]
+
+        new_jaxpr = plxpr_transform(inner_jaxpr, inner_consts, targs, tkwargs, *inner_args)
+        return self.eval(new_jaxpr, inner_consts, *inner_args)
 
 
 class TransformDispatcher:  # pylint: disable=too-many-instance-attributes
@@ -87,13 +95,14 @@ class TransformDispatcher:  # pylint: disable=too-many-instance-attributes
         # is_informative supersedes final_transform
         self._final_transform = is_informative or final_transform
         self._qnode_transform = self.default_qnode_transform
-        self._plxpr_transform = plxpr_transform or _default_plxpr_transform(
-            self._transform.__name__
-        )
+        self._plxpr_transform = plxpr_transform
 
         self._use_argnum_in_expand = use_argnum_in_expand
-        self._primitive = _create_transform_primitive(self._transform.__name__)
         functools.update_wrapper(self, transform)
+
+        self._primitive = _create_transform_primitive(self._transform.__name__)
+        if self._plxpr_transform is not None:
+            register_plxpr_transform(self._primitive, self._plxpr_transform)
 
     def __call__(
         self, *targs, **tkwargs
@@ -256,7 +265,7 @@ class TransformDispatcher:  # pylint: disable=too-many-instance-attributes
         )
         return qnode
 
-    def plxpr_transform(self, primitive, tracers, params, targs, tkwargs, state):
+    def plxpr_transform(self, f: Callable, *targs, **tkwargs) -> Callable:
         """Function for processing primitives to transform PLxPR.
 
         Args:
@@ -272,7 +281,14 @@ class TransformDispatcher:  # pylint: disable=too-many-instance-attributes
             Any: The results of the transformed primitive
         """
         # Implemented this way rather than using a property so that the correct docstring is used
-        return self._plxpr_transform(primitive, tracers, params, targs, tkwargs, state)
+        if self._plxpr_transform is None:
+            raise TransformError(
+                "Can't transform function with program capture enabled using the "
+                f"{self._transform.__name__} transform."
+            )
+
+        interpreter = self._plxpr_transform(*targs, **tkwargs)
+        return interpreter(f)
 
     def _capture_callable_transform(self, qfunc, targs, tkwargs):
         """Apply the transform on a quantum function when program capture is enabled"""
