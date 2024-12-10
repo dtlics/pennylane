@@ -18,7 +18,7 @@ transforms to functions with program capture enabled.
 from functools import wraps
 from typing import Callable
 
-from pennylane.capture import PlxprInterpreter
+from .base_interpreter import PlxprInterpreter
 
 # from .transform_dispatcher import TransformDispatcher
 
@@ -36,5 +36,5 @@ class ExpandTransformsInterpreter(PlxprInterpreter):
 def expand_plxpr_transforms(f: Callable) -> Callable:
 
     expansion_interpreter = ExpandTransformsInterpreter()
-    transformed_f = wraps(f)(expansion_interpreter(f))
+    transformed_f = expansion_interpreter(f)
     return transformed_f

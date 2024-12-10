@@ -19,6 +19,7 @@ A transform for decomposing quantum circuits into user defined gate sets. Offers
 
 import warnings
 from collections.abc import Callable, Generator, Iterable
+from functools import partial
 from typing import Optional
 
 import pennylane as qml
@@ -60,7 +61,7 @@ def _operator_decomposition_gen(
             )
 
 
-class DecomposeInterpreter(qml.capture.PlxprIntepreter):
+class DecomposeInterpreter(qml.capture.PlxprInterpreter):
     """Plxpr Interpreter for applying the ``decompose`` transform to callables or jaxpr
     when program capture is enabled.
     """
@@ -131,7 +132,18 @@ class DecomposeInterpreter(qml.capture.PlxprIntepreter):
         return res
 
 
-@transform
+def decompose_jaxpr(jaxpr, consts, targs, tkwargs, *args):
+    import jax  # pylint: disable=import-outside-toplevel
+
+    interpreter = DecomposeInterpreter(*targs, **tkwargs)
+
+    def wrapper(*inner_args):
+        return interpreter.eval(jaxpr, consts, *inner_args)
+
+    return jax.make_jaxpr(wrapper)(*args)
+
+
+@partial(transform, plxpr_transform=decompose_jaxpr)
 def decompose(tape, gate_set=None, max_expansion=None):
     """Decomposes a quantum circuit into a user-specified gate set.
 

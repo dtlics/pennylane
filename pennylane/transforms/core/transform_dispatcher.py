@@ -25,7 +25,7 @@ from typing import Callable
 import pennylane as qml
 from pennylane.typing import ResultBatch
 
-from .expand_plxpr_transforms import ExpandTransformsInterpreter
+from pennylane.capture.expand_plxpr_transforms import ExpandTransformsInterpreter
 
 
 class TransformError(Exception):
@@ -34,14 +34,22 @@ class TransformError(Exception):
 
 def register_plxpr_transform(transform_primitive, plxpr_transform):
 
-    @ExpandTransformsInterpreter.register_primitive(transform_primitive)
-    def _(self, *invals, inner_jaxpr, args_slice, consts_slice, targs_slice, tkwargs):
-        inner_args = invals[args_slice]
-        inner_consts = invals[consts_slice]
-        targs = invals[targs_slice]
+    if plxpr_transform is None:
 
-        new_jaxpr = plxpr_transform(inner_jaxpr, inner_consts, targs, tkwargs, *inner_args)
-        return self.eval(new_jaxpr, inner_consts, *inner_args)
+        @ExpandTransformsInterpreter.register_primitive(transform_primitive)
+        def _(self, *invals, inner_jaxpr, args_slice, consts_slice, targs_slice, tkwargs):
+            raise NotImplementedError
+
+    else:
+
+        @ExpandTransformsInterpreter.register_primitive(transform_primitive)
+        def _(self, *invals, inner_jaxpr, args_slice, consts_slice, targs_slice, tkwargs):
+            inner_args = invals[args_slice]
+            inner_consts = invals[consts_slice]
+            targs = invals[targs_slice]
+
+            new_jaxpr = plxpr_transform(inner_jaxpr, inner_consts, targs, tkwargs, *inner_args)
+            return self.eval(new_jaxpr.jaxpr, inner_consts, *inner_args)
 
 
 class TransformDispatcher:  # pylint: disable=too-many-instance-attributes
@@ -101,8 +109,7 @@ class TransformDispatcher:  # pylint: disable=too-many-instance-attributes
         functools.update_wrapper(self, transform)
 
         self._primitive = _create_transform_primitive(self._transform.__name__)
-        if self._plxpr_transform is not None:
-            register_plxpr_transform(self._primitive, self._plxpr_transform)
+        register_plxpr_transform(self._primitive, self._plxpr_transform)
 
     def __call__(
         self, *targs, **tkwargs
