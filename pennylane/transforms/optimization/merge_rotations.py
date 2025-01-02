@@ -26,6 +26,107 @@ from .optimization_utils import find_next_gate, fuse_rot_angles
 
 
 @transform
+def _old_merge_rotations(
+    tape: QuantumScript, atol=1e-8, include_gates=None
+) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+    """Legacy implementation of merge_rotations"""
+
+    # Expand away adjoint ops
+    def stop_at(obj):
+        return not isinstance(obj, Adjoint)
+
+    [expanded_tape], _ = qml.devices.preprocess.decompose(
+        tape,
+        stopping_condition=stop_at,
+        name="merge_rotations",
+        error=qml.operation.DecompositionUndefinedError,
+    )
+    list_copy = expanded_tape.operations
+    new_operations = []
+    while len(list_copy) > 0:
+        current_gate = list_copy[0]
+
+        # If a specific list of operations is specified, check and see if our
+        # op is in it, then try to merge. If not, queue and move on.
+        if include_gates is not None:
+            if current_gate.name not in include_gates:
+                new_operations.append(current_gate)
+                list_copy.pop(0)
+                continue
+
+        # Check if the rotation is composable; if it is not, move on.
+        if not current_gate in composable_rotations:
+            new_operations.append(current_gate)
+            list_copy.pop(0)
+            continue
+
+        # Find the next gate that acts on the same wires
+        next_gate_idx = find_next_gate(current_gate.wires, list_copy[1:])
+
+        # If no such gate is found (either there simply is none, or there are other gates
+        # "in the way", queue the operation and move on
+        if next_gate_idx is None:
+            new_operations.append(current_gate)
+            list_copy.pop(0)
+            continue
+
+        # We need to use stack to get this to work and be differentiable in all interfaces
+        cumulative_angles = qml.math.stack(current_gate.parameters)
+        interface = qml.math.get_interface(cumulative_angles)
+        # As long as there is a valid next gate, check if we can merge the angles
+        while next_gate_idx is not None:
+            # Get the next gate
+            next_gate = list_copy[next_gate_idx + 1]
+
+            # If next gate is of the same type, we can merge the angles
+            if isinstance(current_gate, type(next_gate)) and current_gate.wires == next_gate.wires:
+                list_copy.pop(next_gate_idx + 1)
+                next_params = qml.math.stack(next_gate.parameters, like=interface)
+                # jax-jit does not support cast_like
+                if not qml.math.is_abstract(cumulative_angles):
+                    next_params = qml.math.cast_like(next_params, cumulative_angles)
+
+                # The Rot gate must be treated separately
+                if isinstance(current_gate, qml.Rot):
+                    cumulative_angles = fuse_rot_angles(cumulative_angles, next_params)
+                # Other, single-parameter rotation gates just have the angle summed
+                else:
+                    cumulative_angles = cumulative_angles + next_params
+            # If it is not, we need to stop
+            else:
+                break
+
+            # If we did merge, look now at the next gate
+            next_gate_idx = find_next_gate(current_gate.wires, list_copy[1:])
+
+        # If we are tracing/jitting or differentiating, don't perform any conditional checks and
+        # apply the operation regardless of the angles. Otherwise, only apply if
+        # the rotation angle is non-trivial.
+        if (
+            qml.math.is_abstract(cumulative_angles)
+            or qml.math.requires_grad(cumulative_angles)
+            or not qml.math.allclose(cumulative_angles, 0.0, atol=atol, rtol=0)
+        ):
+            with QueuingManager.stop_recording():
+                new_operations.append(
+                    current_gate.__class__(*cumulative_angles, wires=current_gate.wires)
+                )
+
+        # Remove the first gate from the working list
+        list_copy.pop(0)
+
+    new_tape = tape.copy(operations=new_operations)
+
+    def null_postprocessing(results):
+        """A postprocesing function returned by a transform that only converts the batch of results
+        into a result for a single ``QuantumTape``.
+        """
+        return results[0]
+
+    return [new_tape], null_postprocessing
+
+
+@transform
 def merge_rotations(
     tape: QuantumScript, atol=1e-8, include_gates=None
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
@@ -148,77 +249,71 @@ def merge_rotations(
     )
     list_copy = expanded_tape.operations
     new_operations = []
-    while len(list_copy) > 0:
-        current_gate = list_copy[0]
+
+    # merged_ops has wires as keys, and (operator_type, cumulative_angles, op_wires) as values
+    merged_ops = {}
+
+    for op in list_copy:
 
         # If a specific list of operations is specified, check and see if our
         # op is in it, then try to merge. If not, queue and move on.
         if include_gates is not None:
-            if current_gate.name not in include_gates:
-                new_operations.append(current_gate)
-                list_copy.pop(0)
+            if op.name not in include_gates:
+                new_operations.append(op)
                 continue
 
         # Check if the rotation is composable; if it is not, move on.
-        if not current_gate in composable_rotations:
-            new_operations.append(current_gate)
-            list_copy.pop(0)
+        # Or, check if the op doesn't have any wires; if it doesn't, move on.
+        if not op in composable_rotations or not op.wires:
+            new_operations.append(op)
             continue
 
-        # Find the next gate that acts on the same wires
-        next_gate_idx = find_next_gate(current_gate.wires, list_copy[1:])
+        prev_op_type, cumulative_angles, prev_op_wires = merged_ops.get(
+            op.wires[0], (None, None, None)
+        )
 
-        # If no such gate is found (either there simply is none, or there are other gates
-        # "in the way", queue the operation and move on
-        if next_gate_idx is None:
-            new_operations.append(current_gate)
-            list_copy.pop(0)
-            continue
+        if prev_op_type is not None and prev_op_wires == op.wires and prev_op_type == type(op):
+            interface = qml.math.get_interface(cumulative_angles)
+            next_params = qml.math.stack(op.parameters, like=interface)
+            # jax-jit does not support cast_like
+            if not qml.math.is_abstract(cumulative_angles):
+                next_params = qml.math.cast_like(next_params, cumulative_angles)
 
-        # We need to use stack to get this to work and be differentiable in all interfaces
-        cumulative_angles = qml.math.stack(current_gate.parameters)
-        interface = qml.math.get_interface(cumulative_angles)
-        # As long as there is a valid next gate, check if we can merge the angles
-        while next_gate_idx is not None:
-            # Get the next gate
-            next_gate = list_copy[next_gate_idx + 1]
+            # The Rot gate must be treated separately
+            cumulative_angles = (
+                fuse_rot_angles(cumulative_angles, next_params)
+                if isinstance(op, qml.Rot)
+                else cumulative_angles + next_params
+            )
 
-            # If next gate is of the same type, we can merge the angles
-            if isinstance(current_gate, type(next_gate)) and current_gate.wires == next_gate.wires:
-                list_copy.pop(next_gate_idx + 1)
-                next_params = qml.math.stack(next_gate.parameters, like=interface)
-                # jax-jit does not support cast_like
-                if not qml.math.is_abstract(cumulative_angles):
-                    next_params = qml.math.cast_like(next_params, cumulative_angles)
+            new_entry = (prev_op_type, cumulative_angles, prev_op_wires)
+            for w in op.wires:
+                merged_ops[w] = new_entry
 
-                # The Rot gate must be treated separately
-                if isinstance(current_gate, qml.Rot):
-                    cumulative_angles = fuse_rot_angles(cumulative_angles, next_params)
-                # Other, single-parameter rotation gates just have the angle summed
-                else:
-                    cumulative_angles = cumulative_angles + next_params
-            # If it is not, we need to stop
-            else:
-                break
+        else:
+            # Remove any ops from merged_ops that are no longer needed and add them
+            # to new_operations. Add current op to merged_ops
+            # FIXME: cumulative angles are not hashable
+            old_entries = set(merged_ops[w] for w in op.wires if w in merged_ops)
+            for op_type, prev_cumulative_angles, op_wires in old_entries:
+                for w in op_wires:
+                    merged_ops.pop(w)
 
-            # If we did merge, look now at the next gate
-            next_gate_idx = find_next_gate(current_gate.wires, list_copy[1:])
+                # If we are tracing/jitting or differentiating, don't perform any conditional checks and
+                # apply the operation regardless of the angles. Otherwise, only apply if
+                # the rotation angle is non-trivial.
+                if (
+                    qml.math.is_abstract(prev_cumulative_angles)
+                    or qml.math.requires_grad(prev_cumulative_angles)
+                    or not qml.math.allclose(prev_cumulative_angles, 0.0, atol=atol, rtol=0)
+                ):
+                    with QueuingManager.stop_recording():
+                        new_operations.append(op_type(*prev_cumulative_angles, wires=op_wires))
 
-        # If we are tracing/jitting or differentiating, don't perform any conditional checks and
-        # apply the operation regardless of the angles. Otherwise, only apply if
-        # the rotation angle is non-trivial.
-        if (
-            qml.math.is_abstract(cumulative_angles)
-            or qml.math.requires_grad(cumulative_angles)
-            or not qml.math.allclose(cumulative_angles, 0.0, atol=atol, rtol=0)
-        ):
-            with QueuingManager.stop_recording():
-                new_operations.append(
-                    current_gate.__class__(*cumulative_angles, wires=current_gate.wires)
-                )
-
-        # Remove the first gate from the working list
-        list_copy.pop(0)
+            new_cumulative_angles = qml.math.stack(op.parameters)
+            new_entry = (type(op), new_cumulative_angles, op.wires)
+            for w in op.wires:
+                merged_ops[w] = new_entry
 
     new_tape = tape.copy(operations=new_operations)
 
